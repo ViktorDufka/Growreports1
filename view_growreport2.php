@@ -1347,6 +1347,15 @@ if ($action !== '') {
         $st->execute(['rid'=>$growreport_id]); $row=$st->fetch(PDO::FETCH_ASSOC);
         vg2_json(['success'=>true,'settings'=>$row?(json_decode((string)$row['settings_json'],true)?:null):null,'results'=>$row&&$row['results_json']?(json_decode((string)$row['results_json'],true)?:null):null,'updated_at'=>$row['updated_at']??null]);
     }
+    if ($action === 'audit_airflow_from_report') {
+        $st = $pdo->prepare('SELECT w.week_number, a.day_number, a.settings_json FROM growreport_airflow2 a JOIN growreport_weeks2 w ON w.id=a.week_id WHERE w.report_id=:rid ORDER BY w.week_number DESC, a.day_number DESC LIMIT 1');
+        $st->execute(['rid'=>$growreport_id]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) vg2_json(['success'=>false, 'message'=>'V growreportu zatím není uložené nastavení větráků a odtahů.']);
+        $settings = json_decode((string)$row['settings_json'], true);
+        if (!is_array($settings)) vg2_json(['success'=>false, 'message'=>'Uložené nastavení proudění vzduchu má neplatný formát.']);
+        vg2_json(['success'=>true, 'week'=>(int)$row['week_number'], 'day'=>(int)$row['day_number'], 'settings'=>$settings]);
+    }
     if ($action === 'audit_save') {
         $settings=$json['settings']??null; $results=$json['results']??null;
         if(!is_array($settings)||!is_array($results)) vg2_json(['success'=>false,'message'=>'Neplatná data auditu.']);
@@ -5227,7 +5236,7 @@ body.growreport-public-view button:disabled:hover {
  <div class="pruning-dialog" style="width:min(1180px,97vw);max-width:1180px;max-height:94vh;overflow:auto;">
   <div class="pruning-dialog-header"><h3 id="grow-audit-title">A – Audit světla a proudění vzduchu</h3><button type="button" onclick="closeGrowAudit()">×</button></div>
   <div class="pruning-dialog-body">
-   <p style="color:#546e7a">Zadej rozměry prostoru a parametry zařízení. Audit připraví doporučení pro všechny čtyři fáze. Výsledky jsou orientační; PPFD ověř měřidlem na úrovni koruny.</p>
+   <p style="color:#546e7a">Zadej prostor a údaje o světle. Tabulka ukáže PPFD při různém stmívání a vzdálenosti od rostlin; kliknutím vybereš nastavení. Výsledky jsou orientační a nenahrazují měření PPFD.</p>
    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start">
     <section style="border:1px solid #c5d8e8;border-radius:10px;padding:12px;min-width:0">
      <h3 style="color:#1565c0">☀ Audit světla</h3>
@@ -5240,20 +5249,19 @@ body.growreport-public-view button:disabled:hover {
      <label>Aktuální fáze <select id="audit-stage" style="width:100%"><option value="early_growth">A – Raný růst</option><option value="late_growth">B – Pokročilý růst</option><option value="early_flower">C – Raný květ</option><option value="late_flower">D – Pokročilý květ</option></select></label>
      <div style="display:flex;justify-content:space-between;margin:12px 0 6px"><strong>Světla</strong><button type="button" onclick="auditAddLight()">＋ Přidat světlo</button></div>
      <div id="audit-lights"></div>
-     <small style="color:#607d8b">PPF = celkový tok fotonů (µmol/s). PPE/účinnost = µmol/J. PPFD = intenzita dopadající na plochu.</small><div id="audit-light-result" style="margin-top:10px"></div>
+     <small style="color:#607d8b">PPF = celkový tok fotonů (µmol/s). PPE = účinnost (µmol/J). PPFD = intenzita na ploše (µmol/m²/s).</small><div id="audit-ppfd-table" style="margin-top:10px"></div><div id="audit-light-result" style="margin-top:10px"></div>
     </section>
     <section style="border:1px solid #c8dfc8;border-radius:10px;padding:12px;min-width:0">
      <h3 style="color:#2e7d32">〰 Audit proudění vzduchu</h3>
      <p style="font-size:12px;color:#546e7a">CFM znamená cubic feet per minute – kubické stopy za minutu. 1 CFM ≈ 1,699 m³/h.</p>
-     <div style="display:flex;justify-content:space-between;margin:8px 0"><strong>Větráky / odtahy</strong><button type="button" onclick="auditAddFan()">＋ Přidat větrák</button></div>
+     <div style="display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap;margin:8px 0"><strong>Větráky / odtahy</strong><button type="button" onclick="auditLoadAirflow()">Načíst data z growreportu</button><button type="button" onclick="auditAddFan()">＋ Přidat větrák</button></div>
      <div id="audit-fans"></div>
-     <label>Počet rychlostních stupňů <select id="audit-speeds"><option value="3">3 rychlosti</option><option value="4">4 rychlosti</option><option value="5">5 rychlostí</option><option value="6">6 rychlostí</option><option value="10" selected>10 rychlostí</option><option value="variable">Plynulá regulace</option></select></label>
      <div id="audit-air-result" style="margin-top:10px"></div>
     </section>
    </div>
    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px"><button type="button" onclick="deleteGrowAudit()" style="background:#ffebee;color:#b71c1c">Vymazat uložená data</button><button type="button" onclick="calculateGrowAudit()" style="background:#1565c0;color:white">OK – vypočítat a uložit audit</button><button type="button" onclick="closeGrowAudit()">Zavřít</button></div>
    <div id="audit-message" role="status" style="margin-top:10px;font-weight:600"></div><div id="audit-all-phases" style="margin-top:14px"></div>
-   <p style="font-size:11px;color:#78909c">Předvolby vycházejí z dodaných parametrů. U Mars Hydro SP6500 je ve vstupních podkladech rozpor 650 W vs. 220 W; předvolba přebírá 220 W, PPF 1890 a PPE 2,8 a vyžaduje ověření. Model je orientační. Hodnota m/s sama neurčuje m³/h bez průměru/ plochy výstupu. Vzdálenost světla nelze spolehlivě určit pouze z wattů; skutečné PPFD závisí na optice, ploše a rozložení svítidla. Zadané m³/h je třeba chápat jako reálný průtok po započtení odporu filtrů a potrubí.</p>
+   <p style="font-size:11px;color:#78909c">Hodnoty SP3000 jsou dodané odhady, nikoliv naměřené údaje. U ostatních světel nelze z PPF a příkonu určit PPFD podle vzdálenosti bez údajů o optice; proto lze zadat vlastní referenční PPFD a vzdálenost pro hrubý dopočet. PPF při stmívání a průtok při snížených otáčkách jsou lineární odhady. Průtok odtahu zadej pro maximální stupeň po započtení odporu potrubí a filtru. U Mars Hydro SP6500 je rozpor 650 W vs. 220 W v původní předvolbě; údaje před použitím ověř.</p>
   </div>
  </div>
 </div>
@@ -12019,72 +12027,244 @@ function saveTemperature() {
 
 
 <script>
-(function(){
+(function () {
 'use strict';
-const stages=[
- {key:'early_growth',name:'A – Raný růst',min:100,max:250,target:175,airMin:1,airMax:1.5},
- {key:'late_growth',name:'B – Pokročilý růst',min:200,max:500,target:350,airMin:1.5,airMax:2},
- {key:'early_flower',name:'C – Raný květ',min:300,max:700,target:500,airMin:1.5,airMax:2},
- {key:'late_flower',name:'D – Pokročilý květ',min:400,max:900,target:650,airMin:2,airMax:2.5}
+const phases = [
+ {key:'early_growth', name:'A – Raný růst', min:100, max:250, target:175, air:1.25},
+ {key:'late_growth', name:'B – Pokročilý růst', min:200, max:500, target:350, air:1.75},
+ {key:'early_flower', name:'C – Raný květ', min:300, max:700, target:500, air:1.75},
+ {key:'late_flower', name:'D – Pokročilý květ', min:400, max:900, target:650, air:2.25}
 ];
-let lights=[],fans=[];
-const el=id=>document.getElementById(id), val=id=>Number(el(id)?.value||0);
-const safe=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function renderLights(){el('audit-lights').innerHTML=lights.map((x,i)=>`<div style="border:1px solid #dbe5ec;border-radius:7px;padding:8px;margin:7px 0"><div style="display:flex;justify-content:space-between"><b>Světlo ${i+1}</b><button type="button" onclick="auditRemoveLight(${i})">Odebrat</button></div><label>Model / název <input data-l="${i}" data-k="name" value="${safe(x.name)}" style="width:100%;box-sizing:border-box"></label><label>Předvolba zařízení <select data-l="${i}" data-preset="1"><option value="">Vlastní údaje</option><option value="mars6500">Mars Hydro SP6500*</option><option value="omega">Omega Infinity 2.7 PRO</option><option value="se1000">Spider Farmer SE1000W</option><option value="sf2000">Spider Farmer SF2000</option><option value="sf1000">Spider Farmer SF1000</option><option value="vipar">VIPARSPECTRA KS5000</option><option value="acinf">AC Infinity EVO6</option></select></label><div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><label>Watty<input data-l="${i}" data-k="watts" type="number" min="1" value="${x.watts}" style="width:100%;box-sizing:border-box"></label><label>PPF µmol/s<input data-l="${i}" data-k="ppf" type="number" min="1" value="${x.ppf}" style="width:100%;box-sizing:border-box"></label><label>Účinnost µmol/J<input data-l="${i}" data-k="ppe" type="number" min=".1" step=".01" value="${x.ppe}" style="width:100%;box-sizing:border-box"></label><label>Počet kusů<input data-l="${i}" data-k="quantity" type="number" min="1" max="20" value="${x.quantity}" style="width:100%;box-sizing:border-box"></label><label>Vzdálenost cm<input data-l="${i}" data-k="distance" type="number" min="10" max="150" value="${x.distance}" style="width:100%;box-sizing:border-box"></label><label>Využití světla (0–1)<input data-l="${i}" data-k="coverage" type="number" min=".1" max="1" step=".05" value="${x.coverage}" style="width:100%;box-sizing:border-box"></label></div></div>`).join('');}
-function renderFans(){el('audit-fans').innerHTML=fans.map((x,i)=>`<div style="border:1px solid #d8e8d8;border-radius:7px;padding:8px;margin:7px 0"><div style="display:flex;justify-content:space-between"><b>${safe(x.name)}</b><button type="button" onclick="auditRemoveFan(${i})">Odebrat</button></div><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px"><label>Typ<select data-f="${i}" data-k="type"><option value="odtah" ${x.type==='odtah'?'selected':''}>Odtah</option><option value="privod" ${x.type==='privod'?'selected':''}>Přívod</option><option value="cirkulace" ${x.type==='cirkulace'?'selected':''}>Cirkulační</option></select></label><label>Watty<input data-f="${i}" data-k="watts" type="number" min="0" value="${x.watts}"></label><label>Průtok m³/h<input data-f="${i}" data-k="m3h" type="number" min="0" value="${x.m3h}"></label><label>CFM<input data-f="${i}" data-k="cfm" type="number" min="0" step=".1" value="${x.cfm}"></label><label>Max. rychlost vzduchu m/s<input data-f="${i}" data-k="ms" type="number" min="0" step=".1" value="${x.ms}"></label><label>Počet kusů<input data-f="${i}" data-k="quantity" type="number" min="1" max="20" value="${x.quantity}"></label></div></div>`).join('');}
-el('audit-lights').addEventListener('input',e=>{let i=+e.target.dataset.l,k=e.target.dataset.k;if(k&&lights[i])lights[i][k]=k==='name'?e.target.value:Number(e.target.value);});
-const presets={mars6500:{name:'Mars Hydro SP6500*',watts:220,ppf:1890,ppe:2.8},omega:{name:'Omega Infinity 2.7 PRO',watts:220,ppf:540,ppe:2.7},se1000:{name:'Spider Farmer SE1000W',watts:1000,ppf:2940,ppe:2.9},sf2000:{name:'Spider Farmer SF2000',watts:200,ppf:608.5,ppe:2.7},sf1000:{name:'Spider Farmer SF1000',watts:100,ppf:249.21,ppe:2.5},vipar:{name:'VIPARSPECTRA KS5000',watts:500,ppf:1200,ppe:2.4},acinf:{name:'AC Infinity EVO6',watts:500,ppf:1420,ppe:3.14}};
-el('audit-lights').addEventListener('change',e=>{const i=Number(e.target.dataset.l),key=e.target.value,p=e.target.dataset.preset;if(p&&presets[key]&&lights[i]){Object.assign(lights[i],presets[key]);renderLights();}});
-
-el('audit-fans').addEventListener('input',e=>{let i=+e.target.dataset.f,k=e.target.dataset.k;if(k&&fans[i])fans[i][k]=k==='type'?e.target.value:Number(e.target.value);});
-el('audit-fans').addEventListener('change',e=>{const i=Number(e.target.dataset.f),k=e.target.dataset.k;if(!fans[i]||!k)return;if(k==='cfm'){fans[i].m3h=Number(e.target.value)*1.699;renderFans();}else if(k==='m3h'){fans[i].cfm=Number(e.target.value)/1.699;renderFans();}});
-
-window.auditAddLight=()=>{lights.push({name:'Vlastní LED',watts:220,ppf:540,ppe:2.45,quantity:1,distance:40,coverage:.75});renderLights();};
-window.auditAddFan=()=>{fans.push({name:'Větrák '+(fans.length+1),watts:40,m3h:300,cfm:176.6,ms:0,quantity:1,type:'odtah'});renderFans();};
-window.auditRemoveLight=i=>{lights.splice(i,1);renderLights();};window.auditRemoveFan=i=>{fans.splice(i,1);renderFans();};
-let auditLastUnit='cm';
-window.auditUnitChanged=()=>{const next=el('audit-unit').value;if(next===auditLastUnit)return;const ratio=auditLastUnit==='cm'?1/2.54:2.54;['audit-length','audit-width','audit-height'].forEach(id=>{el(id).value=(Number(el(id).value||0)*ratio).toFixed(2);});auditLastUnit=next;};
+const reference = [
+ {distance:60, min:778, max:889}, {distance:55, min:799, max:998},
+ {distance:45, min:791, max:1095}, {distance:40, min:810, max:1150},
+ {distance:30, min:845, max:1095}, {distance:20, min:900, max:1300}
+];
+const distances=[60,55,50,45,40,35,30,25,20];
+const powers=[100,90,80,70,60,50,40,30,25,20];
+const presets={
+ mars3000:{name:'Mars Hydro SP3000',watts:300,ppf:'',ppe:'',profile:'sp3000'},
+ mars6500:{name:'Mars Hydro SP6500*',watts:220,ppf:1890,ppe:2.8,profile:'custom'},
+ omega:{name:'Omega Infinity 2.7 PRO',watts:220,ppf:540,ppe:2.7,profile:'custom'},
+ se1000:{name:'Spider Farmer SE1000W',watts:1000,ppf:2940,ppe:2.9,profile:'custom'},
+ sf2000:{name:'Spider Farmer SF2000',watts:200,ppf:608.5,ppe:2.7,profile:'custom'},
+ sf1000:{name:'Spider Farmer SF1000',watts:100,ppf:249.21,ppe:2.5,profile:'custom'},
+ vipar:{name:'VIPARSPECTRA KS5000',watts:500,ppf:1200,ppe:2.4,profile:'custom'},
+ acinf:{name:'AC Infinity EVO6',watts:500,ppf:1420,ppe:3.14,profile:'custom'}
+};
+const el=id=>document.getElementById(id);
+const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const number=value=>value===''||value===null||value===undefined?null:Number(value);
+const fmt=value=>Math.round(value).toLocaleString('cs-CZ');
+const lightDefault=()=>({name:'Vlastní LED',profile:'custom',watts:'',ppf:'',ppe:'',quantity:1,distance:40,coverage:.75,dim_percent:100,reference_ppfd:'',reference_distance:40});
+const fanDefault=()=>({name:'Odtah',type:'odtah',watts:'',m3h:'',cfm:'',ms:'',quantity:1,speed_scale:3,speed:1});
+let lights=[], fans=[], selectedLight=0, lastUnit='cm';
+const field=(group,i,key,label,value,attrs='')=>`<label>${label}<input data-group="${group}" data-index="${i}" data-key="${key}" value="${esc(value)}" ${attrs} style="width:100%;box-sizing:border-box"></label>`;
+function renderLights(){
+ el('audit-lights').innerHTML=lights.map((x,i)=>`<div style="border:1px solid #dbe5ec;border-radius:7px;padding:8px;margin:7px 0">
+  <div style="display:flex;justify-content:space-between"><b>Světlo ${i+1}</b><button type="button" onclick="auditRemoveLight(${i})">Odebrat</button></div>
+  ${field('light',i,'name','Typ / model světla',x.name)}
+  <label>Předvolba <select data-preset="${i}"><option value="">Vlastní údaje</option>${Object.entries(presets).map(([key,p])=>`<option value="${key}" ${x.preset===key?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
+  <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
+   ${field('light',i,'watts','Příkon při 100 % (W)',x.watts,'type="number" min="0" step="any"')}
+   ${field('light',i,'ppf','PPF při 100 % (µmol/s)',x.ppf,'type="number" min="0" step="any"')}
+   ${field('light',i,'ppe','Účinnost (µmol/J)',x.ppe,'type="number" min="0" step="any"')}
+   ${field('light',i,'quantity','Počet kusů',x.quantity,'type="number" min="1" max="20" step="1"')}
+   ${field('light',i,'distance','Zvolená vzdálenost (cm)',x.distance,'type="number" min="20" max="60" step="1"')}
+   ${field('light',i,'dim_percent','Zvolený výkon (%)',x.dim_percent,'type="number" min="20" max="100" step="1"')}
+   ${field('light',i,'coverage','Využití světla (0–1)',x.coverage,'type="number" min=".01" max="1" step=".01"')}
+   ${field('light',i,'reference_ppfd','Referenční PPFD při 100 %',x.reference_ppfd,'type="number" min="0" step="any"')}
+   ${field('light',i,'reference_distance','Vzdálenost reference (cm)',x.reference_distance,'type="number" min="1" step="any"')}
+  </div></div>`).join('');
+}
+function renderFans(){
+ el('audit-fans').innerHTML=fans.map((x,i)=>`<div style="border:1px solid #d8e8d8;border-radius:7px;padding:8px;margin:7px 0">
+  <div style="display:flex;justify-content:space-between"><b>Ventilátor ${i+1}</b><button type="button" onclick="auditRemoveFan(${i})">Odebrat</button></div>
+  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px">
+   ${field('fan',i,'name','Model / název',x.name)}
+   <label>Typ<select data-group="fan" data-index="${i}" data-key="type">${[['odtah','Odtah'],['privod','Přívod'],['cirkulace','Cirkulační']].map(([value,label])=>`<option value="${value}" ${x.type===value?'selected':''}>${label}</option>`).join('')}</select></label>
+   <label>Počet rychlostí<select data-group="fan" data-index="${i}" data-key="speed_scale"><option value="3" ${Number(x.speed_scale)===3?'selected':''}>Stupně 1–3</option><option value="10" ${Number(x.speed_scale)===10?'selected':''}>Stupně 1–10</option></select></label>
+   <label>Aktuální stupeň<select data-group="fan" data-index="${i}" data-key="speed">${Array.from({length:Number(x.speed_scale)},(_,j)=>`<option value="${j+1}" ${Number(x.speed)===j+1?'selected':''}>Stupeň ${j+1}</option>`).join('')}</select></label>
+   ${field('fan',i,'quantity','Počet kusů',x.quantity,'type="number" min="1" max="20" step="1"')}
+   ${field('fan',i,'m3h','Průtok na maximum (m³/h)',x.m3h,'type="number" min="0" step="any"')}
+   ${field('fan',i,'cfm','Průtok na maximum (CFM)',x.cfm,'type="number" min="0" step="any"')}
+   ${field('fan',i,'watts','Příkon (W)',x.watts,'type="number" min="0" step="any"')}
+   ${field('fan',i,'ms','Rychlost vzduchu (m/s)',x.ms,'type="number" min="0" step="any"')}
+  </div></div>`).join('');
+}
+function referenceAt(distance){
+ const sorted=[...reference].sort((a,b)=>a.distance-b.distance);
+ if(distance<20||distance>60)return null;
+ for(let i=0;i<sorted.length;i++){
+  if(sorted[i].distance===distance)return sorted[i];
+  if(sorted[i].distance>distance){
+   const a=sorted[i-1],b=sorted[i],t=(distance-a.distance)/(b.distance-a.distance);
+   return {min:a.min+(b.min-a.min)*t,max:a.max+(b.max-a.max)*t};
+  }
+ }
+ return null;
+}
+function ppfOf(x){
+ const ppf=number(x.ppf),watts=number(x.watts),ppe=number(x.ppe);
+ return ppf>0?ppf:watts>0&&ppe>0?watts*ppe:null;
+}
+function estimate(x,distance,power){
+ if(x.profile==='sp3000'||String(x.name).trim().toLowerCase()==='mars hydro sp3000'){
+  const ref=referenceAt(distance);
+  return ref?{min:ref.min*power/100,max:ref.max*power/100}:null;
+ }
+ const ppfd=number(x.reference_ppfd),refDistance=number(x.reference_distance);
+ if(!(ppfd>0&&refDistance>0))return null;
+ const value=ppfd*Math.pow(refDistance/distance,2)*power/100;
+ return {min:value,max:value};
+}
+function bestFor(x,phase){
+ let best=null;
+ distances.forEach(distance=>powers.forEach(power=>{
+  const v=estimate(x,distance,power);
+  if(!v)return;
+  const score=Math.abs((v.min+v.max)/2-phase.target);
+  if(!best||score<best.score)best={distance,power,score,value:v};
+ }));
+ return best;
+}
+function table(){
+ if(!lights.length){el('audit-ppfd-table').innerHTML='Přidej světlo pro zobrazení tabulky.';return;}
+ selectedLight=Math.min(selectedLight,lights.length-1);
+ const x=lights[selectedLight],phase=phases.find(p=>p.key===el('audit-stage').value)||phases[0],best=bestFor(x,phase);
+ const options=lights.map((l,i)=>`<option value="${i}" ${i===selectedLight?'selected':''}>${esc(l.name||'Světlo '+(i+1))}</option>`).join('');
+ const ppfs=ppfOf(x);
+ const rows=distances.map(distance=>`<tr><th scope="row">${distance} cm</th>${powers.map(power=>{
+  const v=estimate(x,distance,power);
+  if(!v)return '<td style="padding:6px;text-align:center">—</td>';
+  const color=v.max<phase.min?'#ffebee':v.min>phase.max?'#fff3e0':v.min>=phase.min&&v.max<=phase.max?'#e8f5e9':'#fffde7';
+  const chosen=Number(x.distance)===distance&&Number(x.dim_percent)===power;
+  const recommended=best&&best.distance===distance&&best.power===power;
+  const text=Math.round(v.min)===Math.round(v.max)?fmt(v.min):`${fmt(v.min)}–${fmt(v.max)}`;
+  return `<td style="background:${color};padding:2px;text-align:center"><button type="button" data-choice-distance="${distance}" data-choice-power="${power}" style="background:transparent;border:${chosen?'2px solid #1565c0':'1px solid transparent'};padding:4px;cursor:pointer;min-width:80px;color:#222"><b>${text}</b><br><small>${number(x.watts)>0?fmt(number(x.watts)*power/100)+' W':'W nezadáno'}<br>${ppfs?fmt(ppfs*power/100)+' µmol/s PPF':'PPF nezadáno'}</small>${recommended?'<br><b>★ doporučeno</b>':''}${chosen?'<br>✓ zvoleno':''}</button></td>`;
+ }).join('')}</tr>`).join('');
+ const note=best?`Doporučená shoda pro ${esc(phase.name)}: <b>${best.distance} cm, ${best.power} %</b> (nejbližší cílové PPFD ${phase.target}).`:'Pro toto světlo zadej referenční PPFD při 100 % a jeho vzdálenost; samotné PPF nestačí k určení PPFD ve vzdálenostech.';
+ el('audit-ppfd-table').innerHTML=`<h4>Tabulka PPFD podle vzdálenosti a výkonu</h4><label>Světlo <select id="audit-table-light">${options}</select></label><p style="font-size:12px">${note}<br>PPFD v µmol/m²/s, pod ním příkon a PPF při stmívání pro jeden kus. Klikni na buňku pro výběr. Zelená = v rozsahu fáze, žlutá = částečný překryv, červená = málo, oranžová = mnoho. Pro SP3000 jde o dodané odhady, mezilehlé vzdálenosti se interpolují; pro jiná světla o hrubý dopočet z referenční hodnoty.</p><div style="overflow-x:auto"><table style="border-collapse:collapse"><thead><tr><th>Vzdálenost</th>${powers.map(p=>`<th style="padding:5px">${p} %</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function updateInput(e){
+ const t=e.target,group=t.dataset.group,index=Number(t.dataset.index),key=t.dataset.key;
+ if(!group||!key)return;
+ const item=(group==='light'?lights:fans)[index];
+ if(!item)return;
+ item[key]=['name','type'].includes(key)?t.value:(t.value===''?'':Number(t.value));
+ if(group==='light'){if(key==='name'){item.profile='custom';item.preset='';}table();}
+ if(group==='fan'&&key==='speed_scale'){item.speed=Math.max(1,Math.min(Number(item.speed)||1,Number(item.speed_scale)));renderFans();}
+}
+el('audit-lights').addEventListener('input',updateInput);
+el('audit-fans').addEventListener('input',updateInput);
+el('audit-fans').addEventListener('change',e=>{
+ updateInput(e);
+ const t=e.target,index=Number(t.dataset.index),item=fans[index];
+ if(!item)return;
+ if(t.dataset.key==='m3h'){item.cfm=item.m3h===''?'':Math.round(Number(item.m3h)/1.699*100)/100;renderFans();}
+ if(t.dataset.key==='cfm'){item.m3h=item.cfm===''?'':Math.round(Number(item.cfm)*1.699*100)/100;renderFans();}
+});
+el('audit-lights').addEventListener('change',e=>{
+ if(e.target.dataset.preset===undefined)return;
+ const index=Number(e.target.dataset.preset),key=e.target.value;
+ if(presets[key])Object.assign(lights[index],presets[key],{preset:key});
+ else {lights[index].profile='custom';lights[index].preset='';}
+ renderLights();table();
+});
+el('audit-stage').addEventListener('change',table);
+el('audit-ppfd-table').addEventListener('change',e=>{if(e.target.id==='audit-table-light'){selectedLight=Number(e.target.value);table();}});
+el('audit-ppfd-table').addEventListener('click',e=>{
+ const button=e.target.closest('[data-choice-distance]');if(!button)return;
+ lights[selectedLight].distance=Number(button.dataset.choiceDistance);
+ lights[selectedLight].dim_percent=Number(button.dataset.choicePower);
+ renderLights();table();
+});
+window.auditAddLight=()=>{lights.push(lightDefault());renderLights();table();};
+window.auditRemoveLight=i=>{lights.splice(i,1);selectedLight=Math.max(0,Math.min(selectedLight,lights.length-1));renderLights();table();};
+window.auditAddFan=()=>{fans.push(fanDefault());renderFans();};
+window.auditRemoveFan=i=>{fans.splice(i,1);renderFans();};
+window.auditUnitChanged=()=>{
+ const unit=el('audit-unit').value;if(unit===lastUnit)return;
+ const ratio=lastUnit==='cm'?1/2.54:2.54;
+ ['audit-length','audit-width','audit-height'].forEach(id=>{el(id).value=(Number(el(id).value)*ratio).toFixed(2);});lastUnit=unit;
+};
 function collect(){
- const unit=el('audit-unit').value,f=unit==='in'?.0254:.01;
- const dims={length:val('audit-length')*f,width:val('audit-width')*f,height:val('audit-height')*f};
- if(Object.values(dims).some(v=>!Number.isFinite(v)||v<=0))throw Error('Vyplň platnou délku, šířku a výšku prostoru.');
- if(!lights.length||!fans.length)throw Error('Přidej alespoň jedno světlo a jeden větrák.');
- lights.forEach((x,i)=>{if(x.watts<=0||x.ppf<=0||x.ppe<=0||x.quantity<1||x.distance<10||x.coverage<=0||x.coverage>1)throw Error('Zkontroluj údaje světla '+(i+1)+'.');});
- fans.forEach((x,i)=>{if(x.m3h<0||x.cfm<0||x.quantity<1||x.watts<0)throw Error('Zkontroluj údaje větráku '+(i+1)+'.');});
- return {unit,dimensions:dims,stage:el('audit-stage').value,speed_steps:el('audit-speeds').value,lights,fans};
-}
-function calculate(c){
- const area=c.dimensions.length*c.dimensions.width,volume=area*c.dimensions.height;
- const ppf=c.lights.reduce((a,x)=>a+x.ppf*x.quantity*x.coverage,0);
- const watts=c.lights.reduce((a,x)=>a+x.watts*x.quantity,0);
- const ppe=watts?c.lights.reduce((a,x)=>a+x.ppe*x.watts*x.quantity,0)/watts:0;
- const exhaust=c.fans.filter(x=>x.type==='odtah').reduce((a,x)=>a+x.m3h*x.quantity,0);
- const avgDistance=c.lights.reduce((a,x)=>a+x.distance*x.quantity,0)/c.lights.reduce((a,x)=>a+x.quantity,0);
- const phaseResults=stages.map(st=>{
-  const ppfd=ppf/area,ratio=ppf?(st.target*area/ppf):1;
-  const airMid=(st.airMin+st.airMax)/2,needed=volume*60/airMid;
-  const level=exhaust?Math.min(100,needed/exhaust*100):100;
-  const stepCount=c.speed_steps==='variable'?null:Number(c.speed_steps);
-  const step=stepCount?Math.max(1,Math.min(stepCount,Math.ceil(level/100*stepCount))):null;
-  const dist=ppfd>0?Math.max(10,Math.min(150,avgDistance*Math.sqrt(ppfd/st.target))):avgDistance;
-  const warnings=[];
-  if(ppfd<st.min)warnings.push('Světla jsou slabá pro doporučený rozsah této fáze.');
-  if(ppfd>st.max)warnings.push('Světla jsou příliš silná pro doporučený rozsah této fáze.');
-  if(exhaust<needed)warnings.push('Odtah nedosahuje orientační požadované kapacity.');
-  return {key:st.key,name:st.name,ppfd_min:st.min,ppfd_max:st.max,ppfd_target:st.target,ppfd_estimated:ppfd,watts_current:watts,watts_recommended:watts*ratio,light_percent:Math.round(ratio*100),distance_cm:dist,airflow_required_m3h:needed,airflow_available_m3h:exhaust,fan_speed_percent:Math.round(level),fan_speed:step,warnings};
+ const unit=el('audit-unit').value,factor=unit==='in'?.0254:.01;
+ const dimensions={length:Number(el('audit-length').value)*factor,width:Number(el('audit-width').value)*factor,height:Number(el('audit-height').value)*factor};
+ if(Object.values(dimensions).some(n=>!Number.isFinite(n)||n<=0))throw Error('Zadej platné rozměry prostoru.');
+ if(!lights.length||!fans.length)throw Error('Přidej alespoň jedno světlo a jeden ventilátor.');
+ lights.forEach((x,i)=>{
+  if(!String(x.name).trim()||!Number.isInteger(Number(x.quantity))||x.quantity<1||x.quantity>20||!(number(x.distance)>=20&&number(x.distance)<=60)||!(number(x.dim_percent)>=20&&number(x.dim_percent)<=100)||!(number(x.coverage)>0&&number(x.coverage)<=1))throw Error('Zkontroluj typ, počet a nastavení světla '+(i+1)+'.');
+  if(x.profile!=='sp3000'&&!ppfOf(x))throw Error('U světla '+(i+1)+' zadej PPF nebo příkon a účinnost.');
  });
- return {area_m2:area,volume_m3:volume,estimated_ppfd:ppf/area,total_watts:watts,total_ppf:ppf,weighted_ppe:ppe,airflow_available_m3h:exhaust,stages:phaseResults};
+ fans.forEach((x,i)=>{
+  if(![3,10].includes(Number(x.speed_scale))||!Number.isInteger(Number(x.speed))||x.speed<1||x.speed>x.speed_scale||!Number.isInteger(Number(x.quantity))||x.quantity<1||x.quantity>20||number(x.m3h)<0||number(x.watts)<0)throw Error('Zkontroluj nastavení ventilátoru '+(i+1)+'.');
+ });
+ if(!fans.some(x=>x.type==='odtah'&&number(x.m3h)>0))throw Error('Zadej maximální průtok alespoň jednoho odtahu v m³/h nebo CFM.');
+ return {unit,dimensions,stage:el('audit-stage').value,lights,fans};
 }
-function render(r){
- el('audit-light-result').innerHTML=`<div style="background:#eef5fb;padding:9px;border-radius:7px"><b>Aktuální sestava</b><br>Odhad PPFD: <b>${Math.round(r.estimated_ppfd)} µmol/m²/s</b><br>Příkon: <b>${Math.round(r.total_watts)} W</b><br>PPF po korekci: ${Math.round(r.total_ppf)} µmol/s · PPE: ${r.weighted_ppe.toFixed(2)} µmol/J</div>`;
- el('audit-air-result').innerHTML=`<div style="background:#eef7ee;padding:9px;border-radius:7px"><b>Prostor</b><br>Objem ${r.volume_m3.toFixed(2)} m³ · plocha ${r.area_m2.toFixed(2)} m²<br>Odtah ${Math.round(r.airflow_available_m3h)} m³/h</div>`;
- el('audit-all-phases').innerHTML='<h3>Doporučení pro všechny čtyři fáze</h3>'+r.stages.map(x=>`<div style="border:1px solid #d5e0e8;border-radius:8px;padding:10px;margin:8px 0"><b>${x.name}</b><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:7px"><div>PPFD cíl ${x.ppfd_min}–${x.ppfd_max}</div><div>Odhad nyní <b>${Math.round(x.ppfd_estimated)}</b></div><div>Výkon světel <b>${Math.round(x.watts_recommended)} W</b> (${x.light_percent} %)</div><div>Vzdálenost přibližně <b>${Math.round(x.distance_cm)} cm</b></div><div>Potřeba vzduchu <b>${Math.round(x.airflow_required_m3h)} m³/h</b></div><div>Odtah ${Math.round(x.airflow_available_m3h)} m³/h · větrák ${x.fan_speed_percent}%${x.fan_speed?' / stupeň '+x.fan_speed:''}</div></div>${x.warnings.length?'<div style="color:#b71c1c;font-weight:600;margin-top:7px">⚠ '+x.warnings.map(safe).join('<br>⚠ ')+'</div>':'<div style="color:#2e7d32;margin-top:7px">✓ Odhad odpovídá nastavenému rozsahu.</div>'}</div>`).join('');
+function results(c){
+ const area=c.dimensions.length*c.dimensions.width,volume=area*c.dimensions.height;
+ const maxExhaust=c.fans.filter(f=>f.type==='odtah').reduce((s,f)=>s+(number(f.m3h)||0)*f.quantity,0);
+ const exhaust=c.fans.filter(f=>f.type==='odtah').reduce((s,f)=>s+(number(f.m3h)||0)*f.quantity*f.speed/f.speed_scale,0);
+ const perLight=c.lights.map(l=>({name:l.name,distance:Number(l.distance),power:Number(l.dim_percent),ppfd:estimate(l,Number(l.distance),Number(l.dim_percent)),ppf:ppfOf(l)===null?null:ppfOf(l)*l.dim_percent/100}));
+ const output=phases.map(p=>{
+  const need=volume*60/p.air;
+  const recommendations=c.lights.map(l=>({name:l.name,best:bestFor(l,p)}));
+  const fanRecommendations=c.fans.map(f=>({name:f.name,type:f.type,scale:f.speed_scale,selected:f.speed,recommended:f.type==='odtah'&&maxExhaust>0?Math.min(f.speed_scale,Math.max(1,Math.ceil(need/maxExhaust*f.speed_scale))):null}));
+  const warnings=[];
+  if(exhaust<need)warnings.push('Zvolený průtok odtahu je pod orientační potřebou.');
+  if(maxExhaust<need)warnings.push('Ani maximální zadaný odtah nestačí na orientační potřebu.');
+  return {key:p.key,name:p.name,min:p.min,max:p.max,need,recommendations,fanRecommendations,warnings};
+ });
+ return {area,volume,maxExhaust,exhaust,perLight,phases:output};
 }
-window.calculateGrowAudit=async()=>{try{const c=collect(),r=calculate(c);render(r);el('audit-message').textContent='Ukládám audit…';const d=await postJson('audit_save',{settings:c,results:r});if(!d.success)throw Error(d.message||'Uložení se nezdařilo.');el('audit-message').textContent='Audit byl vypočítán a uložen do SQL.';}catch(e){el('audit-message').textContent=e.message||String(e);}};
-window.openGrowAudit=async()=>{el('grow-audit-dialog').style.display='flex';el('audit-message').textContent='Načítám…';if(!lights.length)window.auditAddLight();if(!fans.length)window.auditAddFan();try{const d=await postJson('audit_get',{});if(d.settings){const c=d.settings;lights=Array.isArray(c.lights)?c.lights:[];fans=Array.isArray(c.fans)?c.fans:[];renderLights();renderFans();el('audit-unit').value=c.unit||'cm';auditLastUnit=el('audit-unit').value;el('audit-stage').value=c.stage||'early_growth';el('audit-speeds').value=String(c.speed_steps||'10');const f=el('audit-unit').value==='in'?1/.0254:100;el('audit-length').value=(c.dimensions.length*f).toFixed(2);el('audit-width').value=(c.dimensions.width*f).toFixed(2);el('audit-height').value=(c.dimensions.height*f).toFixed(2);if(d.results)render(d.results);el('audit-message').textContent='Uložená data načtena.';}else el('audit-message').textContent='Vyplň zařízení a rozměry, poté stiskni OK.';}catch(e){el('audit-message').textContent='Načtení: '+e.message;}};
+function renderResults(r){
+ el('audit-light-result').innerHTML='<b>Zvolené nastavení</b><br>'+r.perLight.map(l=>`${esc(l.name)}: ${l.distance} cm, ${l.power} %, ${l.ppfd?`${fmt(l.ppfd.min)}${Math.round(l.ppfd.min)!==Math.round(l.ppfd.max)?'–'+fmt(l.ppfd.max):''} µmol/m²/s`:'PPFD nelze odhadnout bez referenčního údaje'}, PPF ${l.ppf===null?'nezadáno':fmt(l.ppf)+' µmol/s'}`).join('<br>');
+ el('audit-air-result').innerHTML=`<b>Odtah při zvolených stupních:</b> ${fmt(r.exhaust)} m³/h (maximum ${fmt(r.maxExhaust)} m³/h).<br>Objem prostoru ${r.volume.toFixed(2)} m³.`;
+ el('audit-all-phases').innerHTML='<h3>Doporučení pro všechny čtyři fáze</h3>'+r.phases.map(p=>`<div style="border:1px solid #d5e0e8;border-radius:8px;padding:10px;margin:8px 0"><b>${esc(p.name)}</b> · cílové PPFD ${p.min}–${p.max} µmol/m²/s<br>${p.recommendations.map(x=>`${esc(x.name)}: ${x.best?`doporučeno ${x.best.distance} cm / ${x.best.power} %`:'nelze doporučit bez referenčního PPFD'}`).join('<br>')}<br>Potřeba odtahu: ${fmt(p.need)} m³/h; zvolený odtah: ${fmt(r.exhaust)} m³/h.<br>${p.fanRecommendations.map(f=>`${esc(f.name)}: zvolen stupeň ${f.selected}/${f.scale}${f.recommended!==null?`, orientačně doporučen stupeň ${f.recommended}/${f.scale}`:''}`).join('<br>')}${p.warnings.length?'<div style="color:#b71c1c">⚠ '+p.warnings.map(esc).join('<br>⚠ ')+'</div>':''}</div>`).join('');
+}
+window.calculateGrowAudit=async()=>{
+ try{const settings=collect(),r=results(settings);renderResults(r);el('audit-message').textContent='Ukládám audit…';const data=await postJson('audit_save',{settings,results:r});if(!data.success)throw Error(data.message||'Uložení selhalo.');el('audit-message').textContent='Audit byl uložen do SQL.';}
+ catch(e){el('audit-message').textContent=e.message||String(e);}
+};
+window.openGrowAudit=async()=>{
+ el('grow-audit-dialog').style.display='flex';el('audit-message').textContent='Načítám…';
+ try{
+  const data=await postJson('audit_get',{});if(!data.success)throw Error(data.message||'Načtení selhalo.');
+  if(data.settings){
+   const c=data.settings;lights=(Array.isArray(c.lights)?c.lights:[]).map(x=>Object.assign(lightDefault(),x,{profile:x.profile||(String(x.name||'').trim().toLowerCase()==='mars hydro sp3000'?'sp3000':'custom')}));
+   fans=(Array.isArray(c.fans)?c.fans:[]).map(x=>Object.assign(fanDefault(),x,{speed_scale:[3,10].includes(Number(x.speed_scale))?Number(x.speed_scale):([3,10].includes(Number(c.speed_steps))?Number(c.speed_steps):3)}));
+   fans.forEach(f=>{f.speed=Math.max(1,Math.min(Number(f.speed_scale),Number(f.speed)||1));});
+   el('audit-unit').value=c.unit==='in'?'in':'cm';lastUnit=el('audit-unit').value;el('audit-stage').value=c.stage||'early_growth';
+   if(c.dimensions){const f=lastUnit==='in'?1/.0254:100;['length','width','height'].forEach(k=>{el('audit-'+k).value=(Number(c.dimensions[k])*f).toFixed(2);});}
+   if(data.results&&Array.isArray(data.results.perLight)&&Array.isArray(data.results.phases))renderResults(data.results);
+   else {el('audit-light-result').innerHTML='';el('audit-air-result').innerHTML='';el('audit-all-phases').innerHTML='';}
+   el('audit-message').textContent='Uložená data načtena.';
+  }else{if(!lights.length)lights=[lightDefault()];if(!fans.length)fans=[fanDefault()];el('audit-message').textContent='Vyplň údaje a vypočítej audit.';}
+  renderLights();renderFans();table();
+ }catch(e){el('audit-message').textContent='Načtení: '+e.message;}
+};
+window.auditLoadAirflow=async()=>{
+ try{
+  el('audit-message').textContent='Načítám data z growreportu…';
+  const data=await postJson('audit_airflow_from_report',{});if(!data.success)throw Error(data.message||'Načtení selhalo.');
+  const source=data.settings;
+  const importedFans=(Array.isArray(source.fans)?source.fans:[]).map((f,i)=>Object.assign(fanDefault(),{name:'Větrák '+(i+1),type:'cirkulace',watts:f.watts??'',speed_scale:[3,10].includes(Number(f.speed_scale))?Number(f.speed_scale):3,speed:Number(f.speed)||1}));
+  const importedExhausts=(Array.isArray(source.exhausts)?source.exhausts:[]).map((f,i)=>Object.assign(fanDefault(),{name:f.name||'Odtah '+(i+1),type:f.name==='Přívod'?'privod':'odtah',watts:f.watts??'',speed_scale:10,speed:Number(f.speed)||1}));
+  if(!importedFans.length&&!importedExhausts.length)throw Error('Poslední záznam neobsahuje větráky ani odtahy.');
+  fans=importedFans.concat(importedExhausts);renderFans();
+  el('audit-message').textContent=`Načten poslední záznam: týden ${data.week}, den ${data.day}. Growreport neukládá průtok m³/h ani CFM; doplň ho u odtahu ručně.`;
+ }catch(e){el('audit-message').textContent=e.message||String(e);}
+};
 window.closeGrowAudit=()=>{el('grow-audit-dialog').style.display='none';};
-window.deleteGrowAudit=async()=>{if(!confirm('Vymazat všechna uložená data auditu tohoto Growreportu?'))return;try{const d=await postJson('audit_delete',{});if(!d.success)throw Error(d.message||'Mazání selhalo.');lights=[];fans=[];renderLights();renderFans();el('audit-light-result').innerHTML='';el('audit-air-result').innerHTML='';el('audit-all-phases').innerHTML='';el('audit-message').textContent='Data auditu byla vymazána.';}catch(e){el('audit-message').textContent=e.message;}};
+window.deleteGrowAudit=async()=>{
+ if(!confirm('Vymazat všechna uložená data auditu tohoto Growreportu?'))return;
+ try{const data=await postJson('audit_delete',{});if(!data.success)throw Error(data.message||'Mazání selhalo.');lights=[];fans=[];renderLights();renderFans();table();el('audit-light-result').innerHTML='';el('audit-air-result').innerHTML='';el('audit-all-phases').innerHTML='';el('audit-message').textContent='Data auditu byla vymazána.';}
+ catch(e){el('audit-message').textContent=e.message||String(e);}
+};
 })();
+
 </script>
 
 </body>
